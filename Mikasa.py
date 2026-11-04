@@ -542,12 +542,12 @@ def authed(r):
 fails = defaultdict(list)
 
 @web.middleware
-async def guard_mw(r, h):
-    if r.path.startswith("/api/") and r.path != "/api/login":
-        if not authed(r): return web.json_response({"error": "auth"}, status=401)
+async def guard_mw(request, handler):
+    if request.path.startswith("/api/") and request.path != "/api/login":
+        if not authed(request): return web.json_response({"error": "auth"}, status=401)
         if not db_ready.is_set(): return web.json_response({"error": "starting"}, status=503)
-        if r.method == "POST" and r.headers.get("X-Requested-With") != "mikasa": return web.json_response({"error": "csrf"}, status=403)
-    resp = await h(r)
+        if request.method == "POST" and request.headers.get("X-Requested-With") != "mikasa": return web.json_response({"error": "csrf"}, status=403)
+    resp = await handler(request)
     resp.headers.update({"X-Frame-Options": "DENY", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer",
                          "Content-Security-Policy": "default-src 'self'; img-src 'self' data: https://cdn.discordapp.com https://*.discordapp.com; "
                          "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; script-src 'self' 'unsafe-inline'"})
@@ -615,7 +615,7 @@ async def main():
         except NotImplementedError: pass
     async with bot:
         try: await bot.login(TOKEN)
-        except discord.LoginFailure: raise SystemExit("Invalid TOKEN - reset it in the Discord Developer Portal and update the Render env var.")
+        except discord.LoginFailure: raise SystemExit("Invalid TOKEN - reset it in theDiscord Developer Portal and update the Render env var.")
         await T.sync()
         conn = asyncio.create_task(bot.connect()); bg = [asyncio.create_task(flusher()), asyncio.create_task(keepalive())]
         waiter = asyncio.create_task(stop.wait())
