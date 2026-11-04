@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: mikasa
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python Mikasa.py
+    healthCheckPath: /health
+    envVars:
+      - key: TOKEN
+        sync: false
+      - key: DASHBOARD_PASSWORD
+        sync: false
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: PYTHON_VERSION
+        value: 3.12.3

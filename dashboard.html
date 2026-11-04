@@ -1,0 +1,63 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Mikasa ✿ Dashboard</title>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<style>
+:root{--bg1:#fff0f7;--bg2:#ffd6ea;--card:#ffffffcc;--ink:#5a2a47;--mut:#a06a88;--pk:#ff6fb5;--pk2:#ff9ccf;--line:#ffc2e0}
+@media(prefers-color-scheme:dark){:root{--bg1:#2a1423;--bg2:#3d1b33;--card:#4a213dcc;--ink:#ffe3f1;--mut:#e0a3c4;--line:#7a3a62}}
+*{box-sizing:border-box}html,body{margin:0;min-height:100%}
+body{font-family:"Trebuchet MS","Segoe UI",system-ui,sans-serif;color:var(--ink);background:linear-gradient(160deg,var(--bg1),var(--bg2));padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom);overflow-x:hidden}
+.petal{position:fixed;top:-20px;width:12px;height:12px;background:var(--pk2);border-radius:150% 0 150% 0;opacity:.6;animation:fall linear infinite;pointer-events:none}
+@keyframes fall{to{transform:translateY(110vh) rotate(540deg)}}
+@media(prefers-reduced-motion:reduce){.petal{display:none}}
+main{max-width:760px;margin:0 auto;padding:18px;position:relative}
+h1{margin:6px 0 2px;font-size:28px}h1 span{color:var(--pk)}.sub{color:var(--mut);margin:0 0 16px}
+.card{background:var(--card);border:2px solid var(--line);border-radius:22px;padding:16px;margin:12px 0;backdrop-filter:blur(6px);box-shadow:0 6px 20px #ff6fb533}
+.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+.stat{text-align:center;padding:12px;border-radius:18px;background:linear-gradient(135deg,#ff9ccf55,#ffffff22);border:1px solid var(--line)}
+.stat b{display:block;font-size:24px;color:var(--pk)}.stat small{color:var(--mut)}
+label{display:block;font-size:13px;color:var(--mut);margin:12px 0 4px}
+input,select,textarea,button{font:inherit;width:100%;padding:11px 14px;border-radius:14px;border:2px solid var(--line);background:#fff8;color:var(--ink)}
+@media(prefers-color-scheme:dark){input,select,textarea{background:#0004}}
+button{background:linear-gradient(135deg,var(--pk),var(--pk2));color:#fff;border:0;font-weight:700;cursor:pointer;margin-top:14px}
+button.ghost{background:transparent;color:var(--pk);border:2px solid var(--pk)}
+.srv{display:flex;align-items:center;gap:12px;padding:10px;border-radius:16px;cursor:pointer;border:2px solid transparent}
+.srv:hover,.srv:focus{border-color:var(--pk2);outline:0}.ico{width:42px;height:42px;border-radius:50%;background:var(--pk2);display:grid;place-items:center;color:#fff;font-weight:700;overflow:hidden}
+.ico img{width:100%;height:100%}.row{display:flex;align-items:center;gap:10px}.row input{width:auto}
+#msg{min-height:20px;text-align:center;color:var(--pk);font-weight:700}.hide{display:none}
+.hero{text-align:center;font-size:44px;margin:10px 0}
+</style></head><body>
+<main>
+<div class="hero" aria-hidden="true">(｡♥‿♥｡)</div>
+<h1>Mikasa <span>✿</span> Dashboard</h1><p class="sub">Safe, cute &amp; in control~</p>
+<div id="login" class="card"><label for="pw">Dashboard password</label><input id="pw" type="password" autocomplete="current-password"><button id="go">Log in 🌸</button></div>
+<div id="app" class="hide">
+ <div class="card"><div class="grid" id="stats"></div></div>
+ <div class="card"><b>Your servers</b><div id="list"></div></div>
+ <div id="cfg" class="card hide"><b id="gname"></b>
+  <label>Welcome channel</label><select id="welcome_channel"></select>
+  <label>Welcome message ({user} {server})</label><textarea id="welcome_msg" rows="2" maxlength="500"></textarea>
+  <label>Goodbye channel</label><select id="goodbye_channel"></select>
+  <label>Log channel (mod logs &amp; raid alerts)</label><select id="log_channel"></select>
+  <label>Auto-role for new members</label><select id="autorole"></select>
+  <label>Raid alert: joins within 10s</label><input id="raid_threshold" type="number" min="3" max="50">
+  <label class="row"><input id="xp_enabled" type="checkbox"> Enable levels / XP</label>
+  <label class="row"><input id="ai_enabled" type="checkbox"> Enable AI chat (/ask &amp; @mention)</label>
+  <button id="save">Save settings 💖</button></div>
+ <button class="ghost" id="out">Log out</button>
+</div><div id="msg" role="status"></div></main>
+<script>
+const $=id=>document.getElementById(id);let gid=null;
+const api=async(p,b)=>{const r=await fetch('/api/'+p,b?{method:'POST',headers:{'Content-Type':'application/json','X-Requested-With':'mikasa'},body:JSON.stringify(b)}:{});if(r.status===401&&p!=='login'){show(false)}return r};
+const say=t=>{$('msg').textContent=t;setTimeout(()=>$('msg').textContent='',3500)};
+const show=ok=>{$('login').classList.toggle('hide',ok);$('app').classList.toggle('hide',!ok)};
+const mk=(t,txt,c)=>{const e=document.createElement(t);e.textContent=txt;if(c)e.className=c;return e};
+for(let i=0;i<14;i++){const p=mk('i','','petal');p.style.left=Math.random()*100+'vw';p.style.animationDuration=8+Math.random()*10+'s';p.style.animationDelay=-Math.random()*12+'s';document.body.appendChild(p)}
+async function load(){const r=await api('stats');if(!r.ok)return;show(true);const s=await r.json();$('stats').replaceChildren(...[['Servers',s.servers],['Members',s.members],['Ping',s.latency+'ms'],['Commands',s.commands]].map(([k,v])=>{const d=mk('div','','stat');d.append(mk('b',v),mk('small',k));return d}));
+ const g=await (await api('guilds')).json();$('list').replaceChildren(...g.map(x=>{const d=mk('div','','srv');d.tabIndex=0;const i=mk('div',x.name[0]||'?','ico');if(x.icon){i.textContent='';const im=new Image();im.src=x.icon;im.alt='';i.append(im)}const t=mk('div',x.name);t.append(mk('small',' · '+x.members+' members'));d.append(i,t);d.onclick=()=>open(x);d.onkeydown=e=>e.key==='Enter'&&open(x);return d}))}
+const fill=(id,list,cur,none)=>{const s=$(id);s.replaceChildren(new Option(none,''),...list.map(c=>new Option(c.name,c.id)));s.value=cur||''};
+async function open(g){gid=g.id;const d=await (await api('guild/'+gid)).json();$('gname').textContent=g.name;const s=d.settings;
+ ['welcome_channel','goodbye_channel','log_channel'].forEach(k=>fill(k,d.channels.map(c=>({id:c.id,name:'#'+c.name})),s[k],'— none —'));fill('autorole',d.roles,s.autorole,'— none —');
+ $('welcome_msg').value=s.welcome_msg||'';$('raid_threshold').value=s.raid_threshold||8;$('xp_enabled').checked=s.xp_enabled!==false;$('ai_enabled').checked=s.ai_enabled!==false;$('cfg').classList.remove('hide');$('cfg').scrollIntoView({behavior:'smooth'})}
+$('save').onclick=async()=>{const b={};['welcome_channel','goodbye_channel','log_channel','autorole','welcome_msg'].forEach(k=>b[k]=$(k).value);b.raid_threshold=+$('raid_threshold').value;b.xp_enabled=$('xp_enabled').checked;b.ai_enabled=$('ai_enabled').checked;const r=await api('guild/'+gid,b);say(r.ok?'Saved! ✨':'Could not save')};
+$('go').onclick=async()=>{const r=await api('login',{password:$('pw').value});$('pw').value='';if(r.ok)load();else say(r.status===429?'Too many tries, wait a bit':'Wrong password')};
+$('pw').onkeydown=e=>e.key==='Enter'&&$('go').click();$('out').onclick=async()=>{await api('logout',{});show(false)};load();
+</script></body></html>
