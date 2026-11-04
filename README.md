@@ -6,17 +6,26 @@
 3. Env vars: `TOKEN`, `DASHBOARD_PASSWORD` (long & random).
    Optional AI: `GROQ_API_KEY` (or OPENAI / OPENROUTER / XAI / ANTHROPIC key).
 
-## Global database = a Discord server (`/setdata`)
-Render's free plan erases local files on every restart, so Mikasa stores everything
-(settings, XP, coins, warnings for ALL servers) in a Discord server picked by the bot owner.
+## Data centre = a Discord server (`/set data centre`)
+Render's free plan erases local files on every restart, so Mikasa keeps ALL its data in a private Discord server chosen by the bot owner.
 1. Create/choose a server only you (and people you trust) are in, and invite Mikasa with **Administrator**.
-2. Run `/setdata` there (bot owner only). Mikasa makes a hidden `#mikasa-db` channel and starts saving into it.
-3. That's it - after any restart/redeploy Mikasa finds that server again by itself. No env var needed.
+2. Run `/set data centre` there (bot owner only). Mikasa builds:
+   - **🌐 Global Data** - `#global-data` (bot-wide data) and `#centre-meta` (marker used to find the centre again)
+   - **🌸 \<Server name\>** - one category per server Mikasa is in, each with `#settings` `#users` (XP, coins, warnings) `#ai-memory` `#whitelists` `#logs`
+3. That's it - after any restart/redeploy Mikasa finds the centre again by itself. No env var needed.
 
-- `/setdata` again in another server moves the database there (current data is copied over).
-  Use `/setdata restore:True` to load the data already stored in that server instead.
-- `/dbstatus` (owner only) shows which server is the database, last save time and errors.
-- Never delete `#mikasa-db` or the bot's messages in it. Saved every ~30s and on shutdown.
+- Run it again in another server to move the centre there (current data is copied over). `restore:True` loads the data already stored in that server instead.
+- New servers get their category automatically; renaming a server renames its category.
+- `/dbstatus` (owner only) shows the centre, category progress, unsaved changes, last save and errors.
+- Upgrading from the old `/setdata`/`#mikasa-db`? The old data is still read on startup; run `/set data centre` once to migrate it.
+- Never delete those channels or the bot's messages in them. Saved every ~30s and on shutdown.
+- Discord allows 500 channels per server and each bot server uses 5, so one data centre holds about 98 servers.
+
+## Dashboard checklist
+- `dashboard.html` must sit next to `Mikasa.py` in the repo (the bot only serves it). The startup log warns if it's missing.
+- `DASHBOARD_PASSWORD` must be set in Render -> Environment (the blueprint doesn't fill it in). Login is locked for 10 min after 5 wrong tries.
+- The page must send the header `X-Requested-With: mikasa` on POST requests.
+- Open `https://<your-app>.onrender.com/health` - if that says `ok` the web server is up.
 
 ## Staying awake
 Free services sleep after 15 min without traffic. Mikasa pings itself every 10 min;
