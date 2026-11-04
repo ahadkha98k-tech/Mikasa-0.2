@@ -13,5 +13,7 @@ services:
         sync: false
       - key: SESSION_SECRET
         generateValue: true
+      - key: PYTHONUNBUFFERED
+        value: "1"
       - key: PYTHON_VERSION
         value: 3.12.3

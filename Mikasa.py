@@ -1,11 +1,12 @@
 """Mikasa 2.0 - moderation/community bot + pink anime dashboard (Render web service)."""
-import os, re, json, time, hmac, hashlib, secrets, asyncio, random
+import os, re, io, json, time, hmac, hashlib, secrets, signal, asyncio, random
 from collections import defaultdict, deque
 from datetime import timedelta
 from pathlib import Path
 import discord
 from discord import app_commands
 from discord.ext import commands
+import aiohttp
 from aiohttp import web
 
 TOKEN = os.getenv("TOKEN", "").strip()
@@ -16,17 +17,102 @@ DATA = Path(os.getenv("DATA_DIR", "data")); DATA.mkdir(exist_ok=True)
 PINK = 0xFF8FC7
 BASE = Path(__file__).parent
 
-# ---------- tiny JSON store ----------
+# ---------- storage: a whole Discord server is the database (chosen with /setdata) ----------
+# Render's free plan wipes local files on restart. Data lives as JSON files in a hidden channel (#mikasa-db)
+# of the "data server". On startup the bot finds that server again by looking for its own marker message.
+DB_NAME, MARK = "mikasa-db", "mikasa-data:"
+cloud = {"ch": None, "err": None, "saved": 0}
+db_ready = asyncio.Event()
+
 class Store:
+    all = []
     def __init__(self, name):
-        self.p = DATA / f"{name}.json"
+        self.name, self.p = name, DATA / f"{name}.json"
+        self.msg, self.dirty = None, False
         try: self.d = json.loads(self.p.read_text("utf-8"))
         except Exception: self.d = {}
-    def save(self):
-        tmp = self.p.with_suffix(".tmp"); tmp.write_text(json.dumps(self.d), "utf-8"); tmp.replace(self.p)
+        Store.all.append(self)
+    def save(self): self.dirty = True          # flushed to Discord every ~30s + on shutdown
     def g(self, k, default=None):
         return self.d.setdefault(str(k), default if default is not None else {})
 SET, USERS = Store("settings"), Store("users")
+
+async def db_scan(ch):
+    found, meta = {}, None
+    async for m in ch.history(limit=200, oldest_first=True):   # later messages win
+        if m.author.id != bot.user.id: continue
+        if m.content == MARK + "meta": meta = m
+        elif m.attachments and m.content.startswith(MARK): found[m.content[len(MARK):]] = m
+    return found, meta
+
+async def db_read(s, m):
+    try: s.d = json.loads(await m.attachments[0].read())
+    except ValueError: print(f"WARNING: {s.name}.json in the data server is corrupt; starting it empty")
+    s.msg = m
+
+async def db_load():
+    """Find the data server (newest marker written by this bot) and load everything from it."""
+    best = None
+    for g in bot.guilds:
+        for ch in g.text_channels:
+            p = ch.permissions_for(g.me)
+            if ch.name != DB_NAME or not (p.view_channel and p.read_message_history): continue
+            try: found, meta = await db_scan(ch)
+            except discord.Forbidden: continue
+            if meta and (not best or meta.created_at > best[1].created_at): best = (ch, meta, found)
+    if not best: print("No data server set yet - run /setdata. Data is lost on restart until then."); return
+    ch, _, found = best
+    for s in Store.all:
+        if (m := found.get(s.name)): await db_read(s, m)
+    cloud["ch"] = ch; cloud["err"] = None
+    print(f"Data server: {ch.guild.name} (#{ch.name}), {len(found)} file(s) loaded")
+
+async def db_attach(ch, restore):
+    """Switch to a new data channel. restore=False copies current data into it; True loads what it already holds."""
+    found, _ = await db_scan(ch)
+    for s in Store.all:
+        s.msg = found.get(s.name)
+        if restore and s.msg: await db_read(s, s.msg)
+        else: s.dirty = True
+    cloud["ch"] = ch; cloud["err"] = None
+
+async def cloud_flush():
+    for s in Store.all:
+        if not s.dirty: continue
+        s.dirty = False; raw = json.dumps(s.d).encode()
+        try: s.p.write_text(raw.decode(), "utf-8")
+        except OSError: pass
+        ch = cloud["ch"]
+        if not ch: continue
+        try:
+            if s.msg:
+                try: s.msg = await s.msg.edit(content=MARK + s.name, attachments=[discord.File(io.BytesIO(raw), f"{s.name}.json")]); cloud["saved"] = int(time.time()); continue
+                except discord.NotFound: s.msg = None
+            s.msg = await ch.send(MARK + s.name, file=discord.File(io.BytesIO(raw), f"{s.name}.json")); cloud["saved"] = int(time.time())
+        except Exception as e:
+            s.dirty = True; cloud["err"] = repr(e); print("Database save failed:", repr(e))
+
+async def flusher():
+    while True: await asyncio.sleep(30); await cloud_flush()
+
+async def keepalive():  # pings our own public URL so Render's free plan doesn't put us to sleep
+    url = os.getenv("RENDER_EXTERNAL_URL")
+    if not url: return
+    await asyncio.sleep(60)
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as ses:
+        while True:
+            try: await ses.get(url.rstrip("/") + "/health")
+            except Exception: pass
+            await asyncio.sleep(600)
+
+class Tree(app_commands.CommandTree):  # commands wait until the database has been loaded
+    async def interaction_check(self, i):
+        if not db_ready.is_set():
+            try: await asyncio.wait_for(db_ready.wait(), 15)
+            except asyncio.TimeoutError:
+                await i.response.send_message("Starting up, try again in a moment 🌸", ephemeral=True); return False
+        return True
+
 DEFAULTS = {"welcome_channel": None, "welcome_msg": "Welcome {user} to {server}! 🌸",
             "goodbye_channel": None, "log_channel": None, "autorole": None,
             "raid_threshold": 8, "xp_enabled": True, "ai_enabled": True}
@@ -40,7 +126,7 @@ def emb(title, desc="", color=PINK):
     return discord.Embed(title=title, description=desc, color=color)
 
 intents = discord.Intents.default(); intents.members = True; intents.message_content = True  # needed so "mika"/"mikasa" can trigger AI
-bot = commands.Bot(command_prefix=commands.when_mentioned, intents=intents, help_command=None)
+bot = commands.Bot(command_prefix=commands.when_mentioned, intents=intents, help_command=None, tree_cls=Tree)
 NAME_RE = re.compile(r"\b(mikasa|mika)\b", re.I)
 joins = defaultdict(lambda: deque(maxlen=50)); xp_cd = {}
 
@@ -58,10 +144,17 @@ def can_act(inter, target):
 @bot.event
 async def on_ready():
     await bot.change_presence(activity=discord.Game("🌸 /help"))
+    if not db_ready.is_set():
+        for n in range(3):
+            try: await db_load(); break
+            except Exception as e: cloud["err"] = repr(e); print("Database load failed:", repr(e)); await asyncio.sleep(5 * (n + 1))
+        else: print("FATAL: could not read the data server; exiting so Render restarts me."); os._exit(1)
+        db_ready.set()
     print(f"Ready as {bot.user} in {len(bot.guilds)} servers")
 
 @bot.event
 async def on_member_join(m):
+    if not db_ready.is_set(): return
     s = gs(m.guild.id)
     if s["autorole"] and (r := m.guild.get_role(s["autorole"])) and r < m.guild.me.top_role:
         try: await m.add_roles(r, reason="Autorole")
@@ -76,13 +169,14 @@ async def on_member_join(m):
 
 @bot.event
 async def on_member_remove(m):
+    if not db_ready.is_set(): return
     if (ch := m.guild.get_channel(gs(m.guild.id)["goodbye_channel"] or 0)):
         try: await ch.send(f"Goodbye **{discord.utils.escape_markdown(m.display_name)}** 🌸")
         except discord.HTTPException: pass
 
 @bot.event
 async def on_message(msg):
-    if msg.author.bot or not msg.guild: return
+    if msg.author.bot or not msg.guild or not db_ready.is_set(): return
     replied = msg.reference and isinstance(msg.reference.resolved, discord.Message) and msg.reference.resolved.author == bot.user
     if (bot.user in msg.mentions or replied or NAME_RE.search(msg.content or "")) and gs(msg.guild.id)["ai_enabled"] \
             and time.time() - ai_cd.get(msg.author.id, 0) >= 4:
@@ -271,8 +365,36 @@ async def aiclear(i: discord.Interaction): ai_hist.pop(i.channel_id, None); awai
 @T.command(description="AI status")
 async def aistatus(i: discord.Interaction): await i.response.send_message(f"AI provider: **{ai_pick() or 'not configured'}**", ephemeral=True)
 
+@T.command(name="setdata", description="Bot owner: make THIS server Mikasa's global database")
+@app_commands.guild_only()
+@app_commands.describe(restore="Load the data already stored in this server instead of copying current data into it")
+async def setdata(i: discord.Interaction, restore: bool = False):
+    if not await bot.is_owner(i.user): return await i.response.send_message("Owner only.", ephemeral=True)
+    await i.response.defer(ephemeral=True); g = i.guild
+    try:
+        ch = discord.utils.get(g.text_channels, name=DB_NAME)
+        if not ch:
+            ow = {g.default_role: discord.PermissionOverwrite(view_channel=False),
+                  g.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, attach_files=True, read_message_history=True)}
+            ch = await g.create_text_channel(DB_NAME, overwrites=ow, topic="Mikasa database - do not delete or post here.", reason="Mikasa data server")
+        await db_attach(ch, restore); await cloud_flush(); await ch.send(MARK + "meta")   # marker last = this server is now the newest
+    except discord.Forbidden:
+        return await i.followup.send("I need **Administrator** (or Manage Channels + Manage Roles) here to create my database channel.", ephemeral=True)
+    except Exception as e:
+        return await i.followup.send(f"Failed: `{repr(e)[:300]}`", ephemeral=True)
+    await i.followup.send(f"✅ **{g.name}** is now my global database (hidden channel {ch.mention}). Settings, XP, coins and warnings from every server are saved here and survive restarts. "
+                          "Don't delete that channel, and only let people you trust see this server.")
+@T.command(name="dbstatus", description="Bot owner: database status")
+async def dbstatus(i: discord.Interaction):
+    if not await bot.is_owner(i.user): return await i.response.send_message("Owner only.", ephemeral=True)
+    ch = cloud["ch"]; st = f"✅ **{ch.guild.name}** (#{ch.name})" if ch else "❌ none set - run /setdata in your data server"
+    last = f"\nLast save: <t:{cloud['saved']}:R>" if cloud["saved"] else ""
+    err = f"\nLast error: `{cloud['err'][:300]}`" if cloud["err"] else ""
+    await i.response.send_message(f"**Data server:** {st}{last}{err}", ephemeral=True)
+
 @T.error
 async def on_err(i: discord.Interaction, e):
+    if isinstance(e, app_commands.CheckFailure) and not isinstance(e, app_commands.MissingPermissions): return
     m = "You lack permission." if isinstance(e, app_commands.MissingPermissions) else "Something went wrong."
     send = i.followup.send if i.response.is_done() else i.response.send_message
     try: await send(m, ephemeral=True)
@@ -290,6 +412,7 @@ fails = defaultdict(list)
 async def guard_mw(r, h):
     if r.path.startswith("/api/") and r.path != "/api/login":
         if not authed(r): return web.json_response({"error": "auth"}, status=401)
+        if not db_ready.is_set(): return web.json_response({"error": "starting"}, status=503)
         if r.method == "POST" and r.headers.get("X-Requested-With") != "mikasa": return web.json_response({"error": "csrf"}, status=403)
     resp = await h(r)
     resp.headers.update({"X-Frame-Options": "DENY", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer",
@@ -344,9 +467,24 @@ async def main():
     app.add_routes([web.get("/", index), web.get("/health", health), web.post("/api/login", login), web.post("/api/logout", logout),
         web.get("/api/stats", stats), web.get("/api/guilds", guilds), web.get("/api/guild/{gid}", guild_get), web.post("/api/guild/{gid}", guild_set)])
     runner = web.AppRunner(app); await runner.setup(); await web.TCPSite(runner, "0.0.0.0", PORT).start()
+    stop = asyncio.Event()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try: asyncio.get_running_loop().add_signal_handler(sig, stop.set)
+        except NotImplementedError: pass
     async with bot:
-        await bot.login(TOKEN)
+        try: await bot.login(TOKEN)
+        except discord.LoginFailure: raise SystemExit("Invalid TOKEN - reset it in the Discord Developer Portal and update the Render env var.")
         await T.sync()
-        await bot.connect()
+        conn = asyncio.create_task(bot.connect()); bg = [asyncio.create_task(flusher()), asyncio.create_task(keepalive())]
+        waiter = asyncio.create_task(stop.wait())
+        await asyncio.wait([conn, waiter], return_when=asyncio.FIRST_COMPLETED)
+        if db_ready.is_set(): await cloud_flush()
+        for t in bg + [waiter]: t.cancel()
+        if conn.done() and not conn.cancelled() and conn.exception():
+            e = conn.exception()
+            if isinstance(e, discord.PrivilegedIntentsRequired):
+                raise SystemExit("Enable BOTH 'Server Members Intent' and 'Message Content Intent' in the Developer Portal > Bot.")
+            raise e
+        conn.cancel()
 
 if __name__ == "__main__": asyncio.run(main())
